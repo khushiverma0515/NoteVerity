@@ -4,6 +4,9 @@ import io
 
 import torch
 import torch.nn as nn
+# Limit CPU thread usage to reduce RAM overhead
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
 from PIL import Image
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from torchvision import transforms
