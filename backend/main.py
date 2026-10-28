@@ -72,7 +72,15 @@ async def predict(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Invalid image file.")
 
     # Detect currency denominations
-    results = denomination_model.predict(image, conf=0.25, verbose=False)
+    with torch.inference_mode():
+        results = denomination_model.predict(
+        image,
+        conf=0.25,
+        verbose=False,
+        imgsz=320,
+        device="cpu",
+    )
+
     detections = []
 
     if not any(len(result.boxes) > 0 for result in results):
