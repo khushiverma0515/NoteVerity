@@ -2,10 +2,13 @@
 from pathlib import Path
 import io
 
+# FIX 1 — moved all imports to the top before app is created
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
 import torch
 import torch.nn as nn
 from PIL import Image
-from fastapi import FastAPI, UploadFile, File, HTTPException
 from torchvision import transforms
 from torchvision.models import resnet18
 from ultralytics import YOLO
@@ -14,8 +17,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 MODEL_DIR = BASE_DIR / "model"
 
 app = FastAPI(title="Indian Currency Detection API")
-from fastapi.middleware.cors import CORSMiddleware
 
+# FIX 2 — CORS middleware added right after app is created (import is now at top)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -49,13 +52,16 @@ transform = transforms.Compose([
     ),
 ])
 
+
 @app.get("/")
 def home():
     return {"message": "Indian Currency Detection API is running"}
 
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
@@ -71,25 +77,29 @@ async def predict(file: UploadFile = File(...)):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid image file.")
 
-    # Detect currency denominations
+    # FIX 3 — indentation corrected: all predict() arguments are now
+    # properly inside the `with torch.inference_mode():` block.
     with torch.inference_mode():
         results = denomination_model.predict(
-        image,
-        conf=0.25,
-        verbose=False,
-        imgsz=320,
-        device="cpu",
-    )
+            image,
+            conf=0.25,
+            verbose=False,
+            imgsz=320,
+            device="cpu",
+        )
 
     detections = []
 
     if not any(len(result.boxes) > 0 for result in results):
-       return {
-        "denomination_detections": [],
-        "authenticity": "UNCERTAIN",
-        "authenticity_confidence": 0.0,
-        "warning": "No currency note was detected. Please upload a clear image of an Indian currency note."
-    }
+        return {
+            "denomination_detections": [],
+            "authenticity": "UNCERTAIN",
+            "authenticity_confidence": 0.0,
+            "warning": (
+                "No currency note was detected. "
+                "Please upload a clear image of an Indian currency note."
+            ),
+        }
 
     for result in results:
         for box in result.boxes:
@@ -115,5 +125,5 @@ async def predict(file: UploadFile = File(...)):
         "authenticity_confidence": round(
             float(probabilities[predicted_id]) * 100, 2
         ),
-        "warning": "AI assessment only; this is not proof that a note is genuine or counterfeit."
+        "warning": "AI assessment only; this is not proof that a note is genuine or counterfeit.",
     }

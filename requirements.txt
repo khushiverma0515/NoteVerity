@@ -1,6 +1,6 @@
-
+# Backend
 fastapi
-uvicorn
+uvicorn[standard]
 python-multipart
 ultralytics
 torch
@@ -8,3 +8,7 @@ torchvision
 opencv-python-headless
 Pillow
 numpy
+
+# Frontend
+streamlit
+requests
