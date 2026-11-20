@@ -1,2 +1,8 @@
-# Currency-note-detection-
-AI-powered Indian currency denomination detection and real/fake note classification.
+---
+title: NoteVerity - Currency Note Detection
+emoji: 💵
+colorFrom: red
+colorTo: yellow
+sdk: docker
+pinned: false
+---
