@@ -125,53 +125,7 @@ st.html("""
 </div>
 """)
 
-# --------------------------------------------------
-# AUTO-CLICKER  — components.html has allow-same-origin
-# so window.parent.document IS accessible here.
-# Hides the Take Photo / Clear Photo buttons and
-# auto-clicks them every 5 seconds.
-# --------------------------------------------------
-components.html("""
-<script>
-(function() {
-    var INTERVAL = 5000;
 
-    function setup() {
-        var p;
-        try { p = window.parent.document; } catch(e) { return; }
-
-        /* Inject CSS to hide buttons (visibility:hidden keeps them clickable) */
-        if (!p.getElementById('_nv_hide_')) {
-            var s = p.createElement('style');
-            s.id = '_nv_hide_';
-            s.textContent =
-                '[data-testid="stCameraInputButton"]{' +
-                    'visibility:hidden!important;position:absolute!important;' +
-                    'width:1px!important;height:1px!important;' +
-                '}' +
-                '[data-testid="stCameraInputClear"]{' +
-                    'visibility:hidden!important;position:absolute!important;' +
-                    'width:1px!important;height:1px!important;' +
-                '}';
-            if (p.head) p.head.appendChild(s);
-        }
-
-        function shoot() {
-            var clearBtn = p.querySelector('[data-testid="stCameraInputClear"]');
-            if (clearBtn) { clearBtn.click(); return; }
-            var shutterBtn = p.querySelector('[data-testid="stCameraInputButton"]');
-            if (shutterBtn) shutterBtn.click();
-        }
-
-        setTimeout(shoot, 2000);   /* first shot after camera warms up */
-        setInterval(shoot, INTERVAL);
-    }
-
-    setup();
-    setTimeout(setup, 800);  /* retry if DOM not ready */
-})();
-</script>
-""", height=0)
 
 # --------------------------------------------------
 # RESULT RENDERER
