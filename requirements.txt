@@ -1,14 +1,8 @@
-# Backend
-fastapi
-uvicorn[standard]
-python-multipart
+opencv-python-headless
 ultralytics
 torch
 torchvision
-opencv-python-headless
 Pillow
 numpy
-
-# Frontend
 streamlit
 requests
