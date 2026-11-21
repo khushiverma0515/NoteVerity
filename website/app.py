@@ -90,32 +90,79 @@ def run_inference(image_bytes: bytes) -> dict:
     }
 
 # --------------------------------------------------
-# CSS + JS
+# PAGE CSS + HERO
 # --------------------------------------------------
 st.html("""
 <style>
-:root { --silver: #D9C4B9; --tuscany: #B49E94; }
+:root { --silver:#D9C4B9; --tuscany:#B49E94; }
 .stApp {
     background:
         radial-gradient(ellipse 70% 45% at 50% -8%, rgba(114,70,59,.42), transparent 70%),
         linear-gradient(180deg, #221512 0%, #1b100d 100%);
 }
-[data-testid="stHeader"] { background: transparent; }
-#MainMenu { visibility: hidden; }
-.block-container { max-width: 1180px; padding-top: 2rem; padding-bottom: 40px; }
+[data-testid="stHeader"] { background:transparent; }
+#MainMenu { visibility:hidden; }
+.block-container { max-width:1180px; padding-top:2rem; padding-bottom:40px; }
 .hero       { text-align:center; padding:24px 0 44px; }
 .eyebrow    { color:var(--tuscany); font-size:10px; letter-spacing:3px; opacity:.75; }
 .hero-title { color:var(--silver); font-size:clamp(38px,6vw,58px); letter-spacing:-1.8px; font-weight:760; margin:14px 0; }
 .hero-copy  { color:var(--tuscany); font-size:15px; opacity:.85; }
 .site-footer { margin-top:30px; padding:20px; border-top:1px solid rgba(217,196,185,.1); text-align:center; color:var(--tuscany); opacity:.6; font-size:11px; }
 </style>
-
 <div class="hero">
     <div class="eyebrow">NOTEVERITY &middot; CURRENCY VERIFICATION</div>
     <div class="hero-title">NoteVerity</div>
     <div class="hero-copy">AI-powered currency denomination detection and<br>authenticity screening through your webcam.</div>
 </div>
 """)
+
+# --------------------------------------------------
+# JS AUTO-CLICKER  (components.html has allow-same-origin
+# so window.parent.document IS accessible — unlike st.html)
+# --------------------------------------------------
+components.html("""
+<script>
+(function() {
+    var INTERVAL = 5000;
+
+    function setup() {
+        var p;
+        try { p = window.parent.document; } catch(e) { return; }
+
+        /* Hide Take Photo + Clear Photo buttons visually but keep clickable */
+        if (!p.getElementById('_nv_hide_')) {
+            var s = p.createElement('style');
+            s.id = '_nv_hide_';
+            s.textContent =
+                '[data-testid="stCameraInputButton"]{' +
+                    'visibility:hidden!important;' +
+                    'position:absolute!important;' +
+                    'width:1px!important;height:1px!important;' +
+                '}' +
+                '[data-testid="stCameraInputClear"]{' +
+                    'visibility:hidden!important;' +
+                    'position:absolute!important;' +
+                    'width:1px!important;height:1px!important;' +
+                '}';
+            if (p.head) p.head.appendChild(s);
+        }
+
+        function shoot() {
+            var clearBtn = p.querySelector('[data-testid="stCameraInputClear"]');
+            if (clearBtn) { clearBtn.click(); return; }
+            var shutterBtn = p.querySelector('[data-testid="stCameraInputButton"]');
+            if (shutterBtn) shutterBtn.click();
+        }
+
+        setTimeout(shoot, 2000);
+        setInterval(shoot, INTERVAL);
+    }
+
+    setup();
+    setTimeout(setup, 800);
+})();
+</script>
+""", height=0)
 
 # --------------------------------------------------
 # RESULT RENDERER
@@ -147,60 +194,12 @@ def show_result(result: dict, slot) -> None:
 # SCANNER FRAGMENT  — reruns every 5 s automatically
 # --------------------------------------------------
 @st.fragment(run_every=f"{SCAN_INTERVAL_SECONDS}s")
-def scanner()
-
-# JS auto-clicker via components.html — has allow-same-origin so it CAN
-# access window.parent.document unlike st.html() which is fully sandboxed.
-components.html("""
-<script>
-(function() {
-    var INTERVAL = 5000;
-
-    function setup() {
-        var p;
-        try { p = window.parent.document; } catch(e) { return; }
-
-        /* Hide the Take Photo + Clear buttons visually (keep clickable) */
-        if (!p.getElementById('_nv_hide_')) {
-            var s = p.createElement('style');
-            s.id = '_nv_hide_';
-            s.textContent =
-                '[data-testid="stCameraInputButton"] {' +
-                    'visibility:hidden!important;' +
-                    'position:absolute!important;' +
-                    'width:1px!important;height:1px!important;' +
-                '}' +
-                '[data-testid="stCameraInputClear"] {' +
-                    'visibility:hidden!important;' +
-                    'position:absolute!important;' +
-                    'width:1px!important;height:1px!important;' +
-                '}';
-            if (p.head) p.head.appendChild(s);
-        }
-
-        /* Auto-click shutter, then cycle clear→shutter every INTERVAL ms */
-        function shoot() {
-            var clearBtn = p.querySelector('[data-testid="stCameraInputClear"]');
-            if (clearBtn) { clearBtn.click(); return; }
-            var shutterBtn = p.querySelector('[data-testid="stCameraInputButton"]');
-            if (shutterBtn) shutterBtn.click();
-        }
-
-        setTimeout(shoot, 2000);
-        setInterval(shoot, INTERVAL);
-    }
-
-    setup();
-    setTimeout(setup, 800);  /* retry if DOM not ready first time */
-})();
-</script>
-""", height=0):
+def scanner():
     left, right = st.columns([1.2, 0.85], gap="large")
 
     with left:
         st.markdown("#### Live webcam scanner")
         st.caption("Camera opens automatically — scanning every 5 seconds. No interaction needed.")
-        # Fixed key → captured photo persists across fragment reruns
         img = st.camera_input("", label_visibility="collapsed", key="cam_main")
         if img:
             st.success("✅ Scanning active.")
@@ -212,14 +211,12 @@ components.html("""
         st.caption("Results update every 5 seconds.")
         slot = st.empty()
 
-        # Always show last known result while waiting
         if st.session_state.get("last_result"):
             show_result(st.session_state["last_result"], slot)
 
         if img is None:
             return
 
-        # Rate-limit: only call model if enough time has passed
         now  = time.monotonic()
         last = st.session_state.get("last_scan_time", 0.0)
         if now - last < SCAN_INTERVAL_SECONDS - 0.5:
@@ -232,7 +229,7 @@ components.html("""
         st.session_state["last_result"] = result
         show_result(result, slot)
 
-        # Voice via JS Web Speech API (injected once per new result)
+        # Voice — only speaks when result changes
         dets = result.get("denomination_detections", [])
         if dets:
             best = max(dets, key=lambda x: float(x["confidence"]))
@@ -249,80 +246,26 @@ components.html("""
                 else:
                     msg = f"A {dn} rupee note detected. Authenticity uncertain."
 
-                st.html(f"""
-                <script>
-                (function() {{
-                    var utt = new SpeechSynthesisUtterance("{msg}");
-                    utt.lang  = 'en-IN'; utt.pitch = 1.1; utt.rate = 0.95;
-                    function speak() {{
-                        var voices = window.speechSynthesis.getVoices();
-                        var f = voices.find(function(v) {{
-                            return /female|zira|hazel|susan|heera|raveena|samantha|karen/i.test(v.name);
-                        }});
-                        if (!f) f = voices.find(function(v) {{
-                            return v.lang.startsWith('en') && !/male|david|mark|george|james|richard/i.test(v.name);
-                        }});
-                        if (f) utt.voice = f;
+                st.html(f"""<script>
+                (function(){{
+                    var utt=new SpeechSynthesisUtterance("{msg}");
+                    utt.lang='en-IN'; utt.pitch=1.1; utt.rate=0.95;
+                    function speak(){{
+                        var vv=window.speechSynthesis.getVoices();
+                        var f=vv.find(function(v){{return /female|zira|hazel|susan|heera|raveena|samantha|karen/i.test(v.name);}});
+                        if(!f) f=vv.find(function(v){{return v.lang.startsWith('en')&&!/male|david|mark|george|james|richard/i.test(v.name);}});
+                        if(f) utt.voice=f;
                         window.speechSynthesis.cancel();
                         window.speechSynthesis.speak(utt);
                     }}
-                    if (window.speechSynthesis.getVoices().length === 0) {{
-                        window.speechSynthesis.onvoiceschanged = function() {{
-                            window.speechSynthesis.onvoiceschanged = null; speak();
-                        }};
-                    }} else {{ speak(); }}
+                    if(window.speechSynthesis.getVoices().length===0){{
+                        window.speechSynthesis.onvoiceschanged=function(){{window.speechSynthesis.onvoiceschanged=null;speak();}};
+                    }}else{{speak();}}
                 }})();
-                </script>
-                """)
+                </script>""")
+
 
 scanner()
-
-# JS auto-clicker via components.html — has allow-same-origin so it CAN
-# access window.parent.document unlike st.html() which is fully sandboxed.
-components.html("""
-<script>
-(function() {
-    var INTERVAL = 5000;
-
-    function setup() {
-        var p;
-        try { p = window.parent.document; } catch(e) { return; }
-
-        /* Hide the Take Photo + Clear buttons visually (keep clickable) */
-        if (!p.getElementById('_nv_hide_')) {
-            var s = p.createElement('style');
-            s.id = '_nv_hide_';
-            s.textContent =
-                '[data-testid="stCameraInputButton"] {' +
-                    'visibility:hidden!important;' +
-                    'position:absolute!important;' +
-                    'width:1px!important;height:1px!important;' +
-                '}' +
-                '[data-testid="stCameraInputClear"] {' +
-                    'visibility:hidden!important;' +
-                    'position:absolute!important;' +
-                    'width:1px!important;height:1px!important;' +
-                '}';
-            if (p.head) p.head.appendChild(s);
-        }
-
-        /* Auto-click shutter, then cycle clear→shutter every INTERVAL ms */
-        function shoot() {
-            var clearBtn = p.querySelector('[data-testid="stCameraInputClear"]');
-            if (clearBtn) { clearBtn.click(); return; }
-            var shutterBtn = p.querySelector('[data-testid="stCameraInputButton"]');
-            if (shutterBtn) shutterBtn.click();
-        }
-
-        setTimeout(shoot, 2000);
-        setInterval(shoot, INTERVAL);
-    }
-
-    setup();
-    setTimeout(setup, 800);  /* retry if DOM not ready first time */
-})();
-</script>
-""", height=0)
 
 # --------------------------------------------------
 # FOOTER
