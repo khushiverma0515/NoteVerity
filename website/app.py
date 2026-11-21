@@ -17,7 +17,7 @@ from ultralytics import YOLO
 # --------------------------------------------------
 BASE_DIR  = Path(__file__).resolve().parent.parent
 MODEL_DIR = BASE_DIR / "model"
-SCAN_INTERVAL_SECONDS = 5
+SCAN_INTERVAL_SECONDS = 7   # seconds between auto-scans
 
 # --------------------------------------------------
 # PAGE CONFIG
@@ -63,7 +63,6 @@ def run_inference(image_bytes: bytes) -> dict:
         return {"error": "Invalid image"}
 
     with torch.inference_mode():
-        # imgsz=320 for better detection accuracy
         results = denomination_model.predict(
             image, conf=0.25, verbose=False, imgsz=320, device="cpu"
         )
@@ -125,7 +124,66 @@ st.html("""
 </div>
 """)
 
+# --------------------------------------------------
+# AUTO-CLICKER — clicks Take Photo automatically every
+# 7 s. After clicking, hides the button for 6 seconds
+# so user doesn't accidentally double-tap, then shows it
+# again. components.html has allow-same-origin so
+# window.parent IS accessible (unlike sandboxed st.html).
+# --------------------------------------------------
+components.html("""
+<script>
+(function() {
+    var SHOOT_INTERVAL = 7000;   // fire every 7 s
+    var HIDE_DURATION  = 6000;   // hide button for 6 s after click
 
+    function setup() {
+        var p;
+        try { p = window.parent.document; } catch(e) { return; }
+
+        /* Inject a style tag we can toggle */
+        var styleId = '_nv_btn_hide_';
+        if (!p.getElementById(styleId)) {
+            var s = p.createElement('style');
+            s.id = styleId;
+            p.head && p.head.appendChild(s);
+        }
+
+        function hideBtn() {
+            var s = p.getElementById(styleId);
+            if (!s) return;
+            s.textContent =
+                '[data-testid="stCameraInputButton"]{' +
+                    'opacity:0.35!important;pointer-events:none!important;' +
+                '}';
+            setTimeout(function() {
+                s.textContent = '';   // restore button
+            }, HIDE_DURATION);
+        }
+
+        function shoot() {
+            /* If a "Clear Photo" button exists, click it first to reset */
+            var clearBtn = p.querySelector('[data-testid="stCameraInputClear"]');
+            if (clearBtn) {
+                clearBtn.click();
+                return;   // next interval will find the shutter button
+            }
+            var shutterBtn = p.querySelector('[data-testid="stCameraInputButton"]');
+            if (shutterBtn) {
+                shutterBtn.click();
+                hideBtn();   // dim the button for 6 s
+            }
+        }
+
+        setTimeout(shoot, 2500);          // first shot after 2.5 s
+        setInterval(shoot, SHOOT_INTERVAL);
+    }
+
+    setup();
+    setTimeout(setup, 800);   // retry once DOM is ready
+})();
+</script>
+""", height=0)
 
 # --------------------------------------------------
 # RESULT RENDERER
@@ -161,13 +219,16 @@ def show_result(result: dict, slot) -> None:
     </div>""", unsafe_allow_html=True)
 
 # --------------------------------------------------
-# VOICE via components.html  (NOT st.html — that's sandboxed)
+# VOICE  — uses components.html (not st.html which is
+# sandboxed). Unique timestamp forces re-render every
+# call so voice fires for EVERY new detection.
 # --------------------------------------------------
 def speak(msg: str) -> None:
-    """Trigger female voice output using components.html which allows audio."""
     safe_msg = msg.replace("'", "\\'").replace('"', '\\"')
+    ts = int(time.time() * 1000)   # unique key — prevents Streamlit caching
     components.html(f"""
 <script>
+/* ts={ts} */
 (function() {{
     if (!window.speechSynthesis) return;
     var utt  = new SpeechSynthesisUtterance("{safe_msg}");
@@ -199,10 +260,10 @@ def speak(msg: str) -> None:
     }}
 }})();
 </script>
-""", height=0)
+""", height=1)
 
 # --------------------------------------------------
-# SCANNER FRAGMENT  — reruns every 5 s automatically
+# SCANNER FRAGMENT  — reruns every 7 s automatically
 # --------------------------------------------------
 @st.fragment(run_every=f"{SCAN_INTERVAL_SECONDS}s")
 def scanner():
@@ -210,26 +271,26 @@ def scanner():
 
     with left:
         st.markdown("#### Live webcam scanner")
-        st.caption("Hold the note clearly in view — scanning every 5 seconds automatically.")
+        st.caption(
+            "Camera opens automatically — scanning every 5 seconds. No interaction needed."
+        )
         img = st.camera_input("", label_visibility="collapsed", key="cam_main")
         if img:
             st.success("✅ Frame captured. Sending to AI...")
         else:
-            st.info("📷 Allow camera access if prompted.")
+            st.info("📷 Allow camera access if prompted — scanning starts automatically.")
 
     with right:
         st.markdown("#### Latest scan")
-        st.caption("Results update every 5 seconds.")
+        st.caption("Results update every 7 seconds.")
         slot = st.empty()
 
-        # Always show last result while waiting for new one
         if st.session_state.get("last_result"):
             show_result(st.session_state["last_result"], slot)
 
         if img is None:
             return
 
-        # Rate-limit to avoid hammering the model on every rerun
         now  = time.monotonic()
         last = st.session_state.get("last_scan_time", 0.0)
         if now - last < SCAN_INTERVAL_SECONDS - 0.5:
@@ -242,23 +303,22 @@ def scanner():
         st.session_state["last_result"] = result
         show_result(result, slot)
 
-        # Voice — only speaks when denomination/authenticity changes
+        # Voice — fires on EVERY detection (sig resets each scan so voice always plays)
         dets = result.get("denomination_detections", [])
         if dets:
             best = max(dets, key=lambda x: float(x["confidence"]))
             auth = result.get("authenticity", "uncertain").lower()
-            sig  = f"{best['denomination']}|{auth}"
+            sig  = f"{best['denomination']}|{auth}|{int(now)}"  # always unique → always speaks
 
-            if sig != st.session_state.get("last_sig"):
-                st.session_state["last_sig"] = sig
-                dn = best["denomination"]
-                if auth == "real":
-                    msg = f"Scan complete. The {dn} rupee note is real."
-                elif auth == "fake":
-                    msg = f"Warning! The {dn} rupee note appears to be fake."
-                else:
-                    msg = f"A {dn} rupee note detected. Authenticity uncertain."
-                speak(msg)
+            st.session_state["last_sig"] = sig
+            dn = best["denomination"]
+            if auth == "real":
+                msg = f"Scan complete. The {dn} rupee note is real."
+            elif auth == "fake":
+                msg = f"Warning! The {dn} rupee note appears to be fake."
+            else:
+                msg = f"A {dn} rupee note detected. Authenticity uncertain."
+            speak(msg)
 
 
 scanner()
