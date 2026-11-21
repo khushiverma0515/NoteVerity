@@ -17,7 +17,8 @@ from ultralytics import YOLO
 # --------------------------------------------------
 BASE_DIR  = Path(__file__).resolve().parent.parent
 MODEL_DIR = BASE_DIR / "model"
-SCAN_INTERVAL_SECONDS = 7   # seconds between auto-scans
+SCAN_INTERVAL_SECONDS = 7       # seconds between auto-scans
+MIN_DENOM_CONF        = 60.0    # ignore detections below this % — kills false positives
 
 # --------------------------------------------------
 # PAGE CONFIG
@@ -62,27 +63,32 @@ def run_inference(image_bytes: bytes) -> dict:
     except Exception:
         return {"error": "Invalid image"}
 
+    # conf=0.60 — only accept high-confidence YOLO detections to kill false positives
     with torch.inference_mode():
         results = denomination_model.predict(
-            image, conf=0.25, verbose=False, imgsz=320, device="cpu"
+            image, conf=0.60, verbose=False, imgsz=416, device="cpu"
         )
 
-    if not any(len(r.boxes) > 0 for r in results):
-        return {
-            "denomination_detections": [],
-            "authenticity": "UNCERTAIN",
-            "authenticity_confidence": 0.0,
-        }
-
+    # Collect detections above threshold
     detections = []
     for result in results:
         for box in result.boxes:
-            class_id = int(box.cls.item())
-            detections.append({
-                "denomination": str(result.names[class_id]),
-                "confidence":   round(float(box.conf.item()) * 100, 2),
-            })
+            conf_pct = round(float(box.conf.item()) * 100, 2)
+            if conf_pct >= MIN_DENOM_CONF:          # extra safety filter
+                class_id = int(box.cls.item())
+                detections.append({
+                    "denomination": str(result.names[class_id]),
+                    "confidence":   conf_pct,
+                })
 
+    if not detections:
+        return {
+            "denomination_detections": [],
+            "authenticity":            "UNCERTAIN",
+            "authenticity_confidence": 0.0,
+        }
+
+    # Only run real/fake if we have a confident note detection
     tensor = transform(image).unsqueeze(0)
     with torch.no_grad():
         probs   = torch.softmax(authenticity_model(tensor), dim=1)[0]
@@ -125,23 +131,20 @@ st.html("""
 """)
 
 # --------------------------------------------------
-# AUTO-CLICKER — clicks Take Photo automatically every
-# 7 s. After clicking, hides the button for 6 seconds
-# so user doesn't accidentally double-tap, then shows it
-# again. components.html has allow-same-origin so
-# window.parent IS accessible (unlike sandboxed st.html).
+# AUTO-CLICKER — clicks Take Photo automatically every 7 s.
+# After clicking, button dims for 6 s so user knows scan
+# is in progress, then restores.
 # --------------------------------------------------
 components.html("""
 <script>
 (function() {
-    var SHOOT_INTERVAL = 7000;   // fire every 7 s
-    var HIDE_DURATION  = 6000;   // hide button for 6 s after click
+    var SHOOT_INTERVAL = 7000;
+    var HIDE_DURATION  = 6000;
 
     function setup() {
         var p;
         try { p = window.parent.document; } catch(e) { return; }
 
-        /* Inject a style tag we can toggle */
         var styleId = '_nv_btn_hide_';
         if (!p.getElementById(styleId)) {
             var s = p.createElement('style');
@@ -156,31 +159,22 @@ components.html("""
                 '[data-testid="stCameraInputButton"]{' +
                     'opacity:0.35!important;pointer-events:none!important;' +
                 '}';
-            setTimeout(function() {
-                s.textContent = '';   // restore button
-            }, HIDE_DURATION);
+            setTimeout(function() { s.textContent = ''; }, HIDE_DURATION);
         }
 
         function shoot() {
-            /* If a "Clear Photo" button exists, click it first to reset */
             var clearBtn = p.querySelector('[data-testid="stCameraInputClear"]');
-            if (clearBtn) {
-                clearBtn.click();
-                return;   // next interval will find the shutter button
-            }
+            if (clearBtn) { clearBtn.click(); return; }
             var shutterBtn = p.querySelector('[data-testid="stCameraInputButton"]');
-            if (shutterBtn) {
-                shutterBtn.click();
-                hideBtn();   // dim the button for 6 s
-            }
+            if (shutterBtn) { shutterBtn.click(); hideBtn(); }
         }
 
-        setTimeout(shoot, 2500);          // first shot after 2.5 s
+        setTimeout(shoot, 2500);
         setInterval(shoot, SHOOT_INTERVAL);
     }
 
     setup();
-    setTimeout(setup, 800);   // retry once DOM is ready
+    setTimeout(setup, 800);
 })();
 </script>
 """, height=0)
@@ -191,7 +185,7 @@ components.html("""
 def show_result(result: dict, slot) -> None:
     dets = result.get("denomination_detections", [])
     if not dets:
-        slot.warning("No note detected — hold note closer, ensure good lighting.")
+        slot.warning("No note detected — hold note closer and ensure good lighting.")
         return
     best      = max(dets, key=lambda x: float(x["confidence"]))
     denom     = best["denomination"]
@@ -219,13 +213,11 @@ def show_result(result: dict, slot) -> None:
     </div>""", unsafe_allow_html=True)
 
 # --------------------------------------------------
-# VOICE  — uses components.html (not st.html which is
-# sandboxed). Unique timestamp forces re-render every
-# call so voice fires for EVERY new detection.
+# VOICE
 # --------------------------------------------------
 def speak(msg: str) -> None:
     safe_msg = msg.replace("'", "\\'").replace('"', '\\"')
-    ts = int(time.time() * 1000)   # unique key — prevents Streamlit caching
+    ts = int(time.time() * 1000)
     components.html(f"""
 <script>
 /* ts={ts} */
@@ -272,7 +264,7 @@ def scanner():
     with left:
         st.markdown("#### Live webcam scanner")
         st.caption(
-            "Camera opens automatically — scanning every 5 seconds. No interaction needed."
+            "Camera opens automatically — scanning every 7 seconds. No interaction needed."
         )
         img = st.camera_input("", label_visibility="collapsed", key="cam_main")
         if img:
@@ -285,12 +277,14 @@ def scanner():
         st.caption("Results update every 7 seconds.")
         slot = st.empty()
 
+        # Always show last good result while waiting for next scan
         if st.session_state.get("last_result"):
             show_result(st.session_state["last_result"], slot)
 
         if img is None:
             return
 
+        # Throttle — don't run inference more than once per interval
         now  = time.monotonic()
         last = st.session_state.get("last_scan_time", 0.0)
         if now - last < SCAN_INTERVAL_SECONDS - 0.5:
@@ -300,18 +294,18 @@ def scanner():
         with st.spinner("Running detection..."):
             result = run_inference(img.getvalue())
 
-        st.session_state["last_result"] = result
-        show_result(result, slot)
-
-        # Voice — fires on EVERY detection (sig resets each scan so voice always plays)
         dets = result.get("denomination_detections", [])
+
         if dets:
+            # Only update stored result when we have a REAL confident detection
+            st.session_state["last_result"] = result
+            show_result(result, slot)
+
             best = max(dets, key=lambda x: float(x["confidence"]))
             auth = result.get("authenticity", "uncertain").lower()
-            sig  = f"{best['denomination']}|{auth}|{int(now)}"  # always unique → always speaks
+            dn   = best["denomination"]
 
-            st.session_state["last_sig"] = sig
-            dn = best["denomination"]
+            # Voice fires every confident detection (ts makes it unique every time)
             if auth == "real":
                 msg = f"Scan complete. The {dn} rupee note is real."
             elif auth == "fake":
@@ -319,6 +313,10 @@ def scanner():
             else:
                 msg = f"A {dn} rupee note detected. Authenticity uncertain."
             speak(msg)
+        else:
+            # No confident note found — show warning in result slot
+            # but do NOT overwrite last_result so the last good scan stays in memory
+            slot.warning("No note detected — hold note closer and ensure good lighting.")
 
 
 scanner()
