@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 import torch
 import torch.nn as nn
 from PIL import Image
@@ -109,59 +110,6 @@ st.html("""
 .site-footer { margin-top:30px; padding:20px; border-top:1px solid rgba(217,196,185,.1); text-align:center; color:var(--tuscany); opacity:.6; font-size:11px; }
 </style>
 
-<script>
-/*
-  Auto-capture logic:
-  - Runs in the st.html iframe which shares the same origin as the Streamlit app.
-  - Injects a CSS rule into the PARENT document to visually hide the camera
-    shutter button (visibility:hidden keeps it clickable via JS).
-  - Auto-clicks the shutter every INTERVAL ms, and clears the previous photo
-    before each new capture so Streamlit sees a fresh upload.
-*/
-(function() {
-    var INTERVAL = 5000;
-
-    function run() {
-        var p;
-        try { p = window.parent.document; } catch(e) { return; }
-
-        /* Inject hiding CSS into parent page (only once) */
-        if (!p.getElementById('_nv_hide_')) {
-            var s = p.createElement('style');
-            s.id = '_nv_hide_';
-            s.textContent =
-                '[data-testid="stCameraInputButton"] {' +
-                '    visibility:hidden !important;' +
-                '    position:absolute !important;' +
-                '    width:1px !important; height:1px !important;' +
-                '}' +
-                '[data-testid="stCameraInputClear"] {' +
-                '    visibility:hidden !important;' +
-                '    position:absolute !important;' +
-                '    width:1px !important; height:1px !important;' +
-                '}';
-            if (p.head) p.head.appendChild(s);
-        }
-
-        /* Click shutter or clear */
-        function shoot() {
-            var clearBtn = p.querySelector('[data-testid="stCameraInputClear"]');
-            if (clearBtn) { clearBtn.click(); return; }
-            var btn = p.querySelector('[data-testid="stCameraInputButton"]');
-            if (btn) btn.click();
-        }
-
-        /* Start after camera warms up */
-        setTimeout(shoot, 2000);
-        setInterval(shoot, INTERVAL);
-    }
-
-    /* Try immediately, then retry after 1 s in case DOM isn't ready */
-    run();
-    setTimeout(run, 1000);
-})();
-</script>
-
 <div class="hero">
     <div class="eyebrow">NOTEVERITY &middot; CURRENCY VERIFICATION</div>
     <div class="hero-title">NoteVerity</div>
@@ -199,7 +147,54 @@ def show_result(result: dict, slot) -> None:
 # SCANNER FRAGMENT  — reruns every 5 s automatically
 # --------------------------------------------------
 @st.fragment(run_every=f"{SCAN_INTERVAL_SECONDS}s")
-def scanner():
+def scanner()
+
+# JS auto-clicker via components.html — has allow-same-origin so it CAN
+# access window.parent.document unlike st.html() which is fully sandboxed.
+components.html("""
+<script>
+(function() {
+    var INTERVAL = 5000;
+
+    function setup() {
+        var p;
+        try { p = window.parent.document; } catch(e) { return; }
+
+        /* Hide the Take Photo + Clear buttons visually (keep clickable) */
+        if (!p.getElementById('_nv_hide_')) {
+            var s = p.createElement('style');
+            s.id = '_nv_hide_';
+            s.textContent =
+                '[data-testid="stCameraInputButton"] {' +
+                    'visibility:hidden!important;' +
+                    'position:absolute!important;' +
+                    'width:1px!important;height:1px!important;' +
+                '}' +
+                '[data-testid="stCameraInputClear"] {' +
+                    'visibility:hidden!important;' +
+                    'position:absolute!important;' +
+                    'width:1px!important;height:1px!important;' +
+                '}';
+            if (p.head) p.head.appendChild(s);
+        }
+
+        /* Auto-click shutter, then cycle clear→shutter every INTERVAL ms */
+        function shoot() {
+            var clearBtn = p.querySelector('[data-testid="stCameraInputClear"]');
+            if (clearBtn) { clearBtn.click(); return; }
+            var shutterBtn = p.querySelector('[data-testid="stCameraInputButton"]');
+            if (shutterBtn) shutterBtn.click();
+        }
+
+        setTimeout(shoot, 2000);
+        setInterval(shoot, INTERVAL);
+    }
+
+    setup();
+    setTimeout(setup, 800);  /* retry if DOM not ready first time */
+})();
+</script>
+""", height=0):
     left, right = st.columns([1.2, 0.85], gap="large")
 
     with left:
@@ -281,6 +276,53 @@ def scanner():
                 """)
 
 scanner()
+
+# JS auto-clicker via components.html — has allow-same-origin so it CAN
+# access window.parent.document unlike st.html() which is fully sandboxed.
+components.html("""
+<script>
+(function() {
+    var INTERVAL = 5000;
+
+    function setup() {
+        var p;
+        try { p = window.parent.document; } catch(e) { return; }
+
+        /* Hide the Take Photo + Clear buttons visually (keep clickable) */
+        if (!p.getElementById('_nv_hide_')) {
+            var s = p.createElement('style');
+            s.id = '_nv_hide_';
+            s.textContent =
+                '[data-testid="stCameraInputButton"] {' +
+                    'visibility:hidden!important;' +
+                    'position:absolute!important;' +
+                    'width:1px!important;height:1px!important;' +
+                '}' +
+                '[data-testid="stCameraInputClear"] {' +
+                    'visibility:hidden!important;' +
+                    'position:absolute!important;' +
+                    'width:1px!important;height:1px!important;' +
+                '}';
+            if (p.head) p.head.appendChild(s);
+        }
+
+        /* Auto-click shutter, then cycle clear→shutter every INTERVAL ms */
+        function shoot() {
+            var clearBtn = p.querySelector('[data-testid="stCameraInputClear"]');
+            if (clearBtn) { clearBtn.click(); return; }
+            var shutterBtn = p.querySelector('[data-testid="stCameraInputButton"]');
+            if (shutterBtn) shutterBtn.click();
+        }
+
+        setTimeout(shoot, 2000);
+        setInterval(shoot, INTERVAL);
+    }
+
+    setup();
+    setTimeout(setup, 800);  /* retry if DOM not ready first time */
+})();
+</script>
+""", height=0)
 
 # --------------------------------------------------
 # FOOTER
