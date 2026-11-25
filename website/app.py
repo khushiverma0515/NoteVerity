@@ -136,7 +136,51 @@ st.html("""
 </div>
 """)
 
+# --------------------------------------------------
+# VOICE INPUT — listens continuously for the keyword
+# "scan", "capture", "photo", or "take" and auto-clicks
+# the Take Photo (or Clear Photo) button in the parent.
+# Runs entirely inside the components iframe so no
+# cross-frame security issue.
+# --------------------------------------------------
+components.html("""
+<script>
+(function() {
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;   // browser doesn't support — silently skip
 
+    var p;
+    try { p = window.parent.document; } catch(e) { return; }
+
+    var rec = new SR();
+    rec.continuous      = true;
+    rec.interimResults  = false;
+    rec.lang            = 'en-IN';
+
+    rec.onresult = function(e) {
+        var text = e.results[e.results.length - 1][0].transcript.trim().toLowerCase();
+        // Trigger on common voice commands
+        if (/scan|take|capture|photo|click|detect|check/.test(text)) {
+            var clearBtn   = p.querySelector('[data-testid="stCameraInputClear"]');
+            if (clearBtn)  { clearBtn.click(); return; }
+            var shutterBtn = p.querySelector('[data-testid="stCameraInputButton"]');
+            if (shutterBtn) shutterBtn.click();
+        }
+    };
+
+    // Auto-restart on end or non-fatal error so it stays always-on
+    rec.onerror = function(ev) {
+        if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') return;
+        setTimeout(function() { try { rec.start(); } catch(e) {} }, 1000);
+    };
+    rec.onend = function() {
+        setTimeout(function() { try { rec.start(); } catch(e) {} }, 500);
+    };
+
+    rec.start();
+})();
+</script>
+""", height=0)
 
 # --------------------------------------------------
 # RESULT RENDERER
@@ -220,7 +264,7 @@ left, right = st.columns([1.2, 0.85], gap="large")
 
 with left:
     st.markdown("#### 📷 Live webcam scanner")
-    st.caption("Hold the note **close to the camera so it fills the frame**, then tap **Take Photo**.")
+    st.caption("Hold the note **close to the camera so it fills the frame**, then tap **Take Photo** — or just say **'scan'**.")
 
     # facing_mode="environment" → back camera on phones, webcam on laptop
     img = st.camera_input(
