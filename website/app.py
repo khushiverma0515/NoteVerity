@@ -17,8 +17,8 @@ from ultralytics import YOLO
 # --------------------------------------------------
 BASE_DIR       = Path(__file__).resolve().parent.parent
 MODEL_DIR      = BASE_DIR / "model"
-MIN_DENOM_CONF  = 80.0   # only accept detections above 80% — kills false positives
-MIN_BOX_AREA_PC = 8.0    # detected box must cover ≥8% of image — rejects tiny background matches
+MIN_DENOM_CONF  = 60.0   # confident enough to avoid false positives, not so strict it misses real notes
+MIN_BOX_AREA_PC = 5.0    # detected box must cover ≥5% of image — rejects tiny background matches
 
 # --------------------------------------------------
 # PAGE CONFIG
@@ -65,7 +65,7 @@ def run_inference(image_bytes: bytes) -> dict:
 
     with torch.inference_mode():
         results = denomination_model.predict(
-            image, conf=0.60, verbose=False, imgsz=416, device="cpu"
+            image, conf=0.40, verbose=False, imgsz=640, device="cpu"
         )
 
     img_area   = image.width * image.height
