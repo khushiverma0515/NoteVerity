@@ -17,8 +17,11 @@ from ultralytics import YOLO
 # --------------------------------------------------
 BASE_DIR       = Path(__file__).resolve().parent.parent
 MODEL_DIR      = BASE_DIR / "model"
-MIN_DENOM_CONF  = 60.0   # confident enough to avoid false positives, not so strict it misses real notes
-MIN_BOX_AREA_PC = 5.0    # detected box must cover ≥5% of image — rejects tiny background matches
+MIN_DENOM_CONF  = 60.0   # minimum % to count as a valid detection
+MIN_BOX_AREA_PC = 5.0    # note must cover ≥5% of frame
+# Indian notes are ~1.9–2.6× wider than tall; allow 1.3–4.0 for perspective distortion
+NOTE_AR_MIN     = 1.3
+NOTE_AR_MAX     = 4.0
 
 # --------------------------------------------------
 # PAGE CONFIG
@@ -58,29 +61,53 @@ denomination_model, authenticity_model, transform = load_models()
 # INFERENCE
 # --------------------------------------------------
 def run_inference(image_bytes: bytes) -> dict:
+    """
+    Returns a dict with keys:
+      status  : "no_note" | "unclear" | "detected" | "error"
+      denomination_detections : list of {denomination, confidence}
+      authenticity, authenticity_confidence
+    """
     try:
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     except Exception:
-        return {"error": "Invalid image"}
+        return {"status": "error", "denomination_detections": [],
+                "authenticity": "UNCERTAIN", "authenticity_confidence": 0.0}
 
+    img_w, img_h = image.width, image.height
+    img_area = img_w * img_h
+
+    # Use low YOLO threshold so we see ALL candidates and decide ourselves
     with torch.inference_mode():
         results = denomination_model.predict(
-            image, conf=0.40, verbose=False, imgsz=640, device="cpu"
+            image, conf=0.25, verbose=False, imgsz=640, device="cpu"
         )
 
-    img_area   = image.width * image.height
-    detections = []
+    detections   = []   # passed all filters → genuine note
+    unclear_seen = False  # something note-like found but not confident / too far
+
     for result in results:
         for box in result.boxes:
             conf_pct = round(float(box.conf.item()) * 100, 2)
-            if conf_pct < MIN_DENOM_CONF:
-                continue   # too uncertain — skip
-
-            # Reject tiny matches — a real note should fill at least 8% of frame
             x1, y1, x2, y2 = box.xyxy[0].tolist()
-            box_area_pc = ((x2 - x1) * (y2 - y1) / img_area) * 100
+            w = x2 - x1
+            h = y2 - y1
+            box_area_pc  = (w * h / img_area) * 100
+            aspect_ratio = w / max(h, 1)
+
+            # ── SHAPE FILTER ──────────────────────────────────────────────
+            # Indian notes are ~1.9–2.6:1 wide; allow generous range for tilt
+            if not (NOTE_AR_MIN <= aspect_ratio <= NOTE_AR_MAX):
+                continue   # wrong shape → not a note (catches credit cards held straight)
+
+            # ── SIZE FILTER ───────────────────────────────────────────────
             if box_area_pc < MIN_BOX_AREA_PC:
-                continue   # object too small — likely background noise
+                unclear_seen = True   # note-shaped but too small / far away
+                continue
+
+            # ── CONFIDENCE FILTER ─────────────────────────────────────────
+            if conf_pct < MIN_DENOM_CONF:
+                unclear_seen = True   # note-shaped, right size, but model unsure
+                continue
 
             class_id = int(box.cls.item())
             detections.append({
@@ -88,13 +115,13 @@ def run_inference(image_bytes: bytes) -> dict:
                 "confidence":   conf_pct,
             })
 
+    # ── NOTHING PASSED ALL FILTERS ────────────────────────────────────────
     if not detections:
-        return {
-            "denomination_detections": [],
-            "authenticity":            "UNCERTAIN",
-            "authenticity_confidence": 0.0,
-        }
+        status = "unclear" if unclear_seen else "no_note"
+        return {"status": status, "denomination_detections": [],
+                "authenticity": "UNCERTAIN", "authenticity_confidence": 0.0}
 
+    # ── RUN AUTHENTICITY ON CONFIRMED NOTE ────────────────────────────────
     tensor = transform(image).unsqueeze(0)
     with torch.no_grad():
         probs   = torch.softmax(authenticity_model(tensor), dim=1)[0]
@@ -102,6 +129,7 @@ def run_inference(image_bytes: bytes) -> dict:
     pred_id = int(torch.argmax(probs).item())
 
     return {
+        "status":                  "detected",
         "denomination_detections": detections,
         "authenticity":            classes[pred_id].upper(),
         "authenticity_confidence": round(float(probs[pred_id]) * 100, 2),
@@ -246,10 +274,11 @@ with right:
         with st.spinner("Running AI detection…"):
             result = run_inference(img.getvalue())
 
-        dets = result.get("denomination_detections", [])
+        status = result.get("status", "no_note")
+        dets   = result.get("denomination_detections", [])
 
-        if dets:
-            # Confident detection → save and display
+        if status == "detected" and dets:
+            # ✅ Genuine note — save and display
             st.session_state["last_result"] = result
             show_result(result, slot)
 
@@ -264,11 +293,17 @@ with right:
             else:
                 msg = f"A {dn} rupee note detected. Authenticity uncertain."
             speak(msg)
-        else:
-            # Low confidence — don't overwrite last_result, just warn
+
+        elif status == "unclear":
+            # ⚠️ Note-like object seen but too far / low confidence
             slot.warning(
-                "⚠️ No note detected — make sure the note fills the frame and lighting is clear, then try again."
+                "⚠️ No currency detected. Make sure the lighting is sufficient "
+                "and hold the currency note closer to the camera."
             )
+
+        else:
+            # ❌ Nothing that looks like a note at all
+            slot.error("❌ No currency note detected.")
 
 # --------------------------------------------------
 # FOOTER
